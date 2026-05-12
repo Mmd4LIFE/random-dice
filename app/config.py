@@ -12,11 +12,11 @@ class Settings(BaseSettings):
     # If True: clears webhook and uses getUpdates long polling (no public HTTPS needed).
     use_polling: bool = False
 
-    postgres_host: str = ""
-    postgres_port: int = 
-    postgres_user: str = ""
-    postgres_password: str = ""
-    postgres_db: str = ""
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_user: str = "postgres"
+    postgres_password: str = "LKkl1221"
+    postgres_db: str = "random_dice_bot"
 
     # If set, overrides assembled URL from postgres_* fields
     database_url: str | None = None
