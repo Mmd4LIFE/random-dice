@@ -5,9 +5,10 @@ services:
       - "8000:8000"
     env_file:
       - .env
-    # Defaults to polling when USE_POLLING is unset (Telegram cannot reach /webhook without HTTPS). Override in .env: USE_POLLING=false for webhooks.
+    # Overrides USE_POLLING from env_file — many .env copies still have USE_POLLING=false; Telegram then never reaches /webhook without HTTPS.
+    # For production webhooks: delete the next line (or set USE_POLLING: "false") after TLS + setWebhook are configured.
     environment:
-      USE_POLLING: ${USE_POLLING:-true}
+      USE_POLLING: "true"
     restart: unless-stopped
     # Lets POSTGRES_HOST=host.docker.internal reach Postgres on the Docker host (Linux + Compose v2.4+).
     extra_hosts:
