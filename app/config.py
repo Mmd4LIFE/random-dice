@@ -9,11 +9,14 @@ class Settings(BaseSettings):
     bot_token: str
     webhook_secret: str = ""
 
-    postgres_host: str = "localhost"
-    postgres_port: int = 5432
-    postgres_user: str = "postgres"
-    postgres_password: str = "postgres"
-    postgres_db: str = "telegram_bot"
+    # If True: clears webhook and uses getUpdates long polling (no public HTTPS needed).
+    use_polling: bool = False
+
+    postgres_host: str = ""
+    postgres_port: int = 
+    postgres_user: str = ""
+    postgres_password: str = ""
+    postgres_db: str = ""
 
     # If set, overrides assembled URL from postgres_* fields
     database_url: str | None = None

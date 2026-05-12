@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
@@ -7,8 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import engine, get_db, init_db
-from app.dice_service import log_dice_roll, reply_text_for_dice, upsert_user
-from app.telegram_api import send_message
+from app.poller import polling_worker
+from app.telegram_api import delete_webhook
+from app.update_processor import process_telegram_update
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -20,7 +22,37 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+
+    poll_stop: asyncio.Event | None = None
+    poll_task: asyncio.Task | None = None
+
+    if settings.use_polling:
+        del_body = await delete_webhook(drop_pending_updates=True)
+        logger.info(
+            "USE_POLLING=true — webhook cleared for long polling; deleteWebhook ok=%s",
+            del_body.get("ok"),
+        )
+        poll_stop = asyncio.Event()
+        poll_task = asyncio.create_task(polling_worker(poll_stop))
+        logger.info("telegram_transport=getUpdates polling (no public HTTPS required)")
+    else:
+        logger.info(
+            "telegram_transport=webhook POST /webhook — "
+            "needs HTTPS URL registered + firewall open; webhook_secret=%s",
+            "configured" if settings.webhook_secret else "disabled",
+        )
+
     yield
+
+    if poll_stop is not None:
+        poll_stop.set()
+    if poll_task is not None:
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
+
     engine.dispose()
 
 
@@ -29,14 +61,22 @@ app = FastAPI(title="Telegram Dice Bot", lifespan=lifespan)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "polling": settings.use_polling}
 
 
 def verify_webhook_secret(x_telegram_bot_api_secret_token: str | None = Header(None)) -> None:
+    if settings.use_polling:
+        return
     if not settings.webhook_secret:
         return
     if x_telegram_bot_api_secret_token != settings.webhook_secret:
-        logger.warning("webhook_rejected_bad_secret")
+        if x_telegram_bot_api_secret_token is None:
+            logger.warning(
+                "webhook_rejected_missing_secret_header "
+                "(set WEBHOOK_SECRET empty or re-register webhook with the same secret_token)"
+            )
+        else:
+            logger.warning("webhook_rejected_bad_secret")
         raise HTTPException(status_code=403, detail="Invalid secret")
 
 
@@ -46,51 +86,9 @@ async def telegram_webhook(
     db: Session = Depends(get_db),
     _: None = Depends(verify_webhook_secret),
 ):
+    if settings.use_polling:
+        raise HTTPException(status_code=503, detail="Bot uses polling; webhook disabled")
+
     update: dict[str, Any] = await request.json()
-    logger.debug("webhook_update_received update_id=%s", update.get("update_id"))
-
-    message = update.get("message") or update.get("edited_message")
-    if not message:
-        return {"ok": True}
-
-    chat = message.get("chat") or {}
-    chat_id = chat.get("id")
-
-    text = (message.get("text") or "").strip()
-    if text.startswith("/start"):
-        if chat_id:
-            await send_message(
-                int(chat_id),
-                "Hi! Send an animated dice sticker (🎲 🎯 🏀 ⚽ 🎳 🎰). "
-                "When Telegram delivers the result, I'll reply with the number and save it.",
-            )
-        return {"ok": True}
-
-    dice = message.get("dice")
-    if not dice:
-        return {"ok": True}
-
-    from_user = message.get("from")
-    if not from_user or chat_id is None:
-        logger.warning("dice_message_missing_from_or_chat", extra={"update_id": update.get("update_id")})
-        return {"ok": True}
-
-    dice_emoji = dice.get("emoji") or "🎲"
-    dice_value = int(dice["value"])
-    chat_id = int(chat_id)
-    message_id = int(message["message_id"])
-
-    user = upsert_user(db, from_user)
-    log_dice_roll(
-        db,
-        user=user,
-        dice_emoji=dice_emoji,
-        dice_value=dice_value,
-        chat_id=chat_id,
-        message_id=message_id,
-    )
-    db.commit()
-
-    text = reply_text_for_dice(dice_emoji, dice_value)
-    await send_message(chat_id, text)
+    await process_telegram_update(db, update, source="webhook")
     return {"ok": True}

@@ -6,3 +6,6 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    # Lets POSTGRES_HOST=host.docker.internal reach Postgres on the Docker host (Linux + Compose v2.4+).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
